@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
-# from model.util import clones
+from utils import clones
 # from transformers.activations import get_activation
 
 def self_attention(Q,K,V, mask=None) :
@@ -163,8 +163,8 @@ class PositionalEncoding(nn.Module) :
     
 # ### positionEncoding 시각화
 # import matplotlib.pyplot as plt
-# max_seq_len = 100   # 문장 길이 (Y축)
-# d_model = 128       # 임베딩 차원 (X축, 시각화를 위해 128로 설정)
+# max_seq_len = 100
+# d_model = 128
 # # (내부적으로 __init__이 실행되면서 pe 행렬이 만들어짐
 # pe_layer = PositionalEncoding(max_seq_len, d_model)
 # pe_matrix = pe_layer.positional_encoding.squeeze(0).numpy()
@@ -176,7 +176,7 @@ class PositionalEncoding(nn.Module) :
 # plt.xlabel('Dimension (d_model Index)')
 # plt.title('Positional Encoding Heatmap')
 # plt.colorbar()
-# plt.ylim(max_seq_len, 0) # Y축 상단이 0이 되도록 반전
+# plt.ylim(max_seq_len, 0)
 
 # plt.subplot(1, 2, 2)
 # plt.plot(pe_matrix[:, 0], label='Dim 0 (Sin, High Freq)', alpha=0.7)
@@ -193,3 +193,64 @@ class PositionalEncoding(nn.Module) :
 # plt.tight_layout()
 # plt.show()
 
+class Generator(nn.Module):
+    def __init__(self, d_model, vocab_num):
+        super(Generator, self).__init__()
+        self.proj_1 = nn.Linear(d_model, d_model*4)
+        self.proj_2 = nn.Linear(d_model*4, vocab_num)
+
+    def forward(self, x):
+        x = self.proj_1(x)
+        x = self.proj_2(x)
+        return x
+    
+class Transformer(nn.Module) :
+    def __init__(self, vocab_num, d_model, max_seq_len, head_num, dropout, N) :
+        super(Transformer, self).__init__()
+
+        self.embedding = Embeddings(vocab_num, d_model)
+        self.positional_encoding = PositionalEncoding(max_seq_len,d_model)
+
+        self.encoders = clones(Encoder(d_model=d_model, head_num=head_num, dropout=dropout), N)
+        self.decoders = clones(Decoder(d_model=d_model, head_num=head_num, dropout=dropout), N)
+
+        self.generator = Generator(d_model, vocab_num)
+    
+    def forward(self, input_, target, input_mask, target_mask, labels=None) :
+        x = self.positional_encoding(self.embedding(input_))
+        for encoder in self.encoders:
+            x = encoder(x, input_mask)
+
+        target = self.positional_encoding(self.embedding(target))
+        for decoder in self.decoders:
+            target = decoder(target, x, target_mask, input_mask)
+
+        lm_logits = self.generator(target)
+        loss = None
+
+        if labels is not None :
+            # shift -> 다음 단어 맞추기가 목표
+            # 마지막 토큰 버림 - target 없음
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            # <sos> 버림
+            shift_labels = labels[..., 1:].contiguous()
+            
+            loss_fct = CrossEntropyLoss(ignore_index=0)
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
+        return lm_logits, loss
+    
+    def encode(self, input_, input_mask) :
+        x = self.positional_encoding(self.embedding(input_))
+        for encoder in self.encoders :
+            x = encoder(x, input_mask)
+        return x
+    
+    def decode(self, encode_output, encoder_mask, target, target_mask):
+        target = self.positional_encoding(self.embedding(target))
+        for decoder in self.decoders:
+            target = decoder(target, encode_output, target_mask, encoder_mask)
+
+        lm_logits = self.generator(target)
+
+        return lm_logits
