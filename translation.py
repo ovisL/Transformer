@@ -1,5 +1,6 @@
 import torch
 from transformer import Transformer
+from transformers import BertTokenizer #hugging face transformers
 
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
@@ -7,6 +8,7 @@ import math
 import os
 import time
 
+from utils import TranslationDataset
 class TranslationTrainer() :
     def __init__(self,
                dataset,
@@ -143,7 +145,8 @@ class TranslationTrainer() :
                                        'loss {:5.2f} | ppl {:8.2f}'.format(epoch, i, len(train_dataset), scheduler.get_lr()[0], elapsed * 1000 / log_interval, cur_loss, math.exp(cur_loss)))
                     total_loss = 0
                     start_time = time.time()
-                    # self.save(epoch, self.model, optimizer, losses, global_steps)
+
+                    
                     if i % save_interval == 0:
                         self.save(epoch, self.model, optimizer, losses, global_steps)
                 val_loss = self.evaluate(eval_dataset)
@@ -203,4 +206,27 @@ if __name__ == '__main__':
     dropout = 0.1
     N = 6
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    
+
+    tokenizer = BertTokenizer(vocab_file=vocab_path, do_lower_case=False)
+
+    epochs = 50
+    batch_size = 4
+    padding_idx = tokenizer.pad_token_id
+    learning_rate = 0.5
+
+    dataset = TranslationDataset(tokenizer=tokenizer, file_path=data_path, max_length=max_length)
+
+    model = Transformer(vocab_num=vocab_num,
+                        d_model=d_model,
+                        max_seq_len=max_length,
+                        head_num=head_num,
+                        dropout=dropout,
+                        N=N)
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+
+    trainer = TranslationTrainer(dataset, tokenizer, model, max_length, device, model_name, checkpoint_path, batch_size)
+    train_dataloader, eval_dataloader = trainer.build_dataloaders(train_test_split=0.2)
+
+    trainer.train(epochs, train_dataloader, eval_dataloader, optimizer, scheduler)
